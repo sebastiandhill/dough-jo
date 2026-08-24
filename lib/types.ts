@@ -54,6 +54,9 @@ export interface RecurringOrder {
   weekday: number; // 0=Sun..6=Sat
   weekOfMonth?: number; // 1-4, only for monthly
   status: RecurringStatus;
+  /** The pattern's fixed reference point — every occurrence is projected
+   * forward from this date. Re-anchored when the day/frequency changes. */
+  anchorDateId: string;
   nextPickupDateId: string;
   skippedDateIds: string[];
   createdAt: string;

@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useDough } from "@/lib/store";
 import { bakerySettings } from "@/lib/mock-data/settings";
+import { canFulfillOnDate } from "@/lib/dates";
 import { itemsCount, itemsTotal, formatMoney } from "@/lib/utils";
 import type { OrderItem } from "@/lib/types";
 import { Button } from "@/components/ui/Button";
@@ -15,9 +16,13 @@ const STEPS = ["Bread", "Day", "Details"];
 
 export default function OrderPage() {
   const router = useRouter();
-  const { products, getAvailablePickupDates, createOrder } = useDough();
+  const { products, orders, recurringOrders, getAvailablePickupDates, createOrder } =
+    useDough();
   const availableProducts = products.filter((p) => p.available);
-  const dates = useMemo(() => getAvailablePickupDates(4), [getAvailablePickupDates]);
+  const rawDates = useMemo(
+    () => getAvailablePickupDates(8),
+    [getAvailablePickupDates]
+  );
 
   const [step, setStep] = useState(1);
   const [qty, setQty] = useState<Record<string, number>>({});
@@ -27,20 +32,44 @@ export default function OrderPage() {
   const [email, setEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  const items: OrderItem[] = availableProducts
-    .map((p) => ({ productId: p.id, quantity: qty[p.id] ?? 0 }))
-    .filter((i) => i.quantity > 0);
+  const items: OrderItem[] = useMemo(
+    () =>
+      availableProducts
+        .map((p) => ({ productId: p.id, quantity: qty[p.id] ?? 0 }))
+        .filter((i) => i.quantity > 0),
+    // availableProducts is derived fresh from `products` each render; its
+    // contents (not identity) are what matter here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [products, qty]
+  );
+
+  // A date only counts as a real option if THIS cart's quantities actually
+  // fit what's left after recurring reservations — not just the aggregate
+  // headline number. This is what stops a one-time order from taking a
+  // regular's reserved loaf.
+  const dates = useMemo(
+    () =>
+      rawDates
+        .map((d) => ({
+          ...d,
+          fits: canFulfillOnDate(items, d.id, products, orders, recurringOrders),
+        }))
+        .filter((d) => d.fits || d.id === dateId)
+        .slice(0, 4),
+    [rawDates, items, products, orders, recurringOrders, dateId]
+  );
 
   const orderCount = itemsCount(items);
   const total = itemsTotal(items, products);
   const selectedDate = dates.find((d) => d.id === dateId) ?? null;
+  const selectedDateFits = selectedDate?.fits ?? false;
 
   const bump = (id: string, delta: number) =>
     setQty((s) => ({ ...s, [id]: Math.max(0, (s[id] ?? 0) + delta) }));
 
   const blocked =
     (step === 1 && orderCount === 0) ||
-    (step === 2 && !selectedDate) ||
+    (step === 2 && (!selectedDate || !selectedDateFits)) ||
     (step === 3 && (!name.trim() || !phone.trim()));
 
   const nextLabel = step === 1 ? "PICK A DAY" : step === 2 ? "CONTINUE" : "PLACE ORDER";
@@ -109,6 +138,7 @@ export default function OrderPage() {
                   key={d.id}
                   date={d}
                   selected={d.id === dateId}
+                  fits={d.fits}
                   onSelect={() => setDateId(d.id)}
                 />
               ))}

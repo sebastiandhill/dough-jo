@@ -69,15 +69,22 @@ export function RecurringOrderCard({
     const items = Object.entries(qty)
       .map(([productId, quantity]) => ({ productId, quantity }))
       .filter((i) => i.quantity > 0);
-    const nextPickupDateId =
-      weekday === order.weekday
-        ? order.nextPickupDateId
-        : toISODate(
-            order.frequency === "monthly"
-              ? nextMonthlyDate(weekday, order.weekOfMonth ?? 1)
-              : nextDateForWeekday(weekday)
-          );
-    updateRecurringOrder(order.id, { items, weekday, nextPickupDateId });
+    const dayChanged = weekday !== order.weekday;
+    const nextPickupDateId = dayChanged
+      ? toISODate(
+          order.frequency === "monthly"
+            ? nextMonthlyDate(weekday, order.weekOfMonth ?? 1)
+            : nextDateForWeekday(weekday)
+        )
+      : order.nextPickupDateId;
+    // Re-anchor the whole projected pattern to the new day, so future
+    // occurrences (used for capacity reservation) land on the right dates.
+    updateRecurringOrder(order.id, {
+      items,
+      weekday,
+      nextPickupDateId,
+      ...(dayChanged ? { anchorDateId: nextPickupDateId } : {}),
+    });
     setEditing(false);
   }
 

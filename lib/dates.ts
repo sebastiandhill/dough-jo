@@ -1,6 +1,6 @@
 import { bakerySettings } from "@/lib/mock-data/settings";
-import { initialProducts } from "@/lib/mock-data/products";
-import type { PickupDate } from "@/lib/types";
+import type { Order, PickupDate, Product, RecurringOrder } from "@/lib/types";
+import { recurringOrdersForDate } from "@/lib/recurring";
 
 function startOfToday(): Date {
   const d = new Date();
@@ -32,33 +32,77 @@ export function formatLongDate(d: Date): string {
   });
 }
 
-/** Deterministic pseudo-random 0..1, seeded by an integer, so the mock
- * capacity pattern is stable across renders/reloads instead of flickering. */
-function seededRandom(n: number): number {
-  const x = Math.sin(n * 12.9898) * 43758.5453;
-  return x - Math.floor(x);
+/** Per-product remaining units for one pickup date: starts from each
+ * available product's admin-set cap, then reserves recurring customers'
+ * projected orders FIRST (so a regular never loses their loaf to a one-time
+ * order placed later), then subtracts real orders already on the books. */
+export function remainingCapacityForDate(
+  dateId: string,
+  products: Product[],
+  orders: Order[],
+  recurringOrders: RecurringOrder[]
+): Record<string, number> {
+  const remaining: Record<string, number> = {};
+  products.forEach((p) => {
+    if (p.available) remaining[p.id] = p.maxPerBakeDay;
+  });
+
+  const ordersForDate = orders.filter((o) => o.pickupDateId === dateId);
+
+  // Recurring reservations, skipping any that already have a real order on
+  // the books for this date (already accounted for below, in step 2).
+  recurringOrdersForDate(recurringOrders, dateId).forEach((r) => {
+    const materialized = ordersForDate.some(
+      (o) => o.recurringOrderId === r.id
+    );
+    if (materialized) return;
+    r.items.forEach((item) => {
+      if (remaining[item.productId] != null) {
+        remaining[item.productId] -= item.quantity;
+      }
+    });
+  });
+
+  // Real orders already placed for this date (one-time and materialized
+  // recurring alike).
+  ordersForDate.forEach((o) => {
+    o.items.forEach((item) => {
+      if (remaining[item.productId] != null) {
+        remaining[item.productId] -= item.quantity;
+      }
+    });
+  });
+
+  return remaining;
 }
 
-const totalDailyCapacity = initialProducts.reduce(
-  (sum, p) => sum + p.maxPerBakeDay,
-  0
-);
-
-/** Simulates other customers having already booked part of a bake day's
- * capacity, so the date picker isn't uniformly wide open. */
-function bookedForDate(dayIndex: number): number {
-  const pattern = [4, totalDailyCapacity - 2, 1, 0];
-  const base = pattern[dayIndex % pattern.length];
-  const jitter = Math.floor(seededRandom(dayIndex) * 3);
-  return Math.min(totalDailyCapacity, base + jitter);
+/** Whether a specific cart of items can actually be fulfilled on this date —
+ * i.e. every item's quantity fits within what's left after recurring
+ * reservations and existing orders. This is the real enforcement behind
+ * "a regular never loses their loaf": it's checked before a one-time order
+ * can be placed, not just shown as a hint. */
+export function canFulfillOnDate(
+  items: { productId: string; quantity: number }[],
+  dateId: string,
+  products: Product[],
+  orders: Order[],
+  recurringOrders: RecurringOrder[]
+): boolean {
+  const remaining = remainingCapacityForDate(dateId, products, orders, recurringOrders);
+  return items.every((item) => (remaining[item.productId] ?? 0) >= item.quantity);
 }
 
 /** Generates the next N available pickup dates, honoring the bakery's lead
- * time and bake-day schedule, with mock remaining-capacity figures. */
-export function getAvailablePickupDates(count = 4): PickupDate[] {
+ * time and bake-day schedule, with live remaining-capacity figures that
+ * reflect current product caps/visibility and real + recurring demand. */
+export function getAvailablePickupDates(
+  products: Product[],
+  orders: Order[],
+  recurringOrders: RecurringOrder[],
+  count = 4
+): PickupDate[] {
   const today = startOfToday();
   const out: PickupDate[] = [];
-  let dayIndex = 0;
 
   for (
     let i = bakerySettings.leadTimeDays;
@@ -69,8 +113,16 @@ export function getAvailablePickupDates(count = 4): PickupDate[] {
     if (!bakerySettings.availableBakeWeekdays.includes(d.getDay())) continue;
 
     const key = toISODate(d);
-    const remaining = totalDailyCapacity - bookedForDate(dayIndex);
-    dayIndex++;
+    const perProduct = remainingCapacityForDate(
+      key,
+      products,
+      orders,
+      recurringOrders
+    );
+    const remaining = Object.values(perProduct).reduce(
+      (sum, n) => sum + Math.max(0, n),
+      0
+    );
     if (remaining <= 0) continue;
 
     out.push({

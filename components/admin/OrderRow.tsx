@@ -15,6 +15,9 @@ export function OrderRow({
   onAdvance: (status: Order["status"]) => void;
 }) {
   const done = order.status === "picked-up";
+  // A "received" order hasn't been touched yet — make its action stand out
+  // in red so new orders are impossible to miss on a busy board.
+  const isNew = order.status === "received";
   return (
     <div className="flex flex-wrap gap-4 items-center justify-between py-3.5 border-t border-divider">
       <div className="min-w-0">
@@ -32,7 +35,7 @@ export function OrderRow({
         </Badge>
         <Button
           size="sm"
-          variant={done ? "secondary" : "primary"}
+          variant={done ? "secondary" : isNew ? "danger" : "primary"}
           disabled={done}
           onClick={() => onAdvance(nextOrderStatus(order.status))}
         >

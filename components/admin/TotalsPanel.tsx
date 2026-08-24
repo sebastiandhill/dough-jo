@@ -1,8 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { Product } from "@/lib/types";
-import { getSalesHistory } from "@/lib/mock-data/sales-history";
+import type { Order, Product } from "@/lib/types";
+import { ordersToSalesRecords } from "@/lib/sales";
 import { cx } from "@/lib/utils";
 
 type Range = "month" | "lastMonth" | "quarter" | "year" | "custom";
@@ -30,8 +30,11 @@ function rangeBounds(range: Range, from: string, to: string) {
   start.setHours(0, 0, 0, 0);
 
   if (range === "month") {
-    start.setDate(1);
-    return { from: start, to: today };
+    // Spans the whole current month — not just up to today — so upcoming
+    // booked orders later this month show up alongside what's already sold.
+    const a = new Date(today.getFullYear(), today.getMonth(), 1);
+    const b = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59);
+    return { from: a, to: b };
   }
   if (range === "lastMonth") {
     const a = new Date(today.getFullYear(), today.getMonth() - 1, 1);
@@ -43,8 +46,10 @@ function rangeBounds(range: Range, from: string, to: string) {
     return { from: start, to: today };
   }
   if (range === "year") {
-    start.setMonth(0, 1);
-    return { from: start, to: today };
+    // Same reasoning as "month": the full year, including upcoming bookings.
+    const a = new Date(today.getFullYear(), 0, 1);
+    const b = new Date(today.getFullYear(), 11, 31, 23, 59, 59);
+    return { from: a, to: b };
   }
   const a = from ? new Date(`${from}T00:00:00`) : new Date(today.getFullYear(), today.getMonth(), 1);
   const b = to ? new Date(`${to}T23:59:59`) : today;
@@ -60,24 +65,34 @@ function pillClass(active: boolean) {
   );
 }
 
-export function TotalsPanel({ products }: { products: Product[] }) {
+export function TotalsPanel({
+  products,
+  orders,
+}: {
+  products: Product[];
+  orders: Order[];
+}) {
   const [range, setRange] = useState<Range>("month");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [filterProduct, setFilterProduct] = useState<string>("all");
 
   const bounds = useMemo(() => rangeBounds(range, from, to), [range, from, to]);
-  const history = getSalesHistory();
+  // Totals are driven entirely by real placed orders — no simulated backdrop.
+  const allSales = useMemo(
+    () => ordersToSalesRecords(orders, products),
+    [orders, products]
+  );
 
   const rows = useMemo(
     () =>
-      history.filter(
+      allSales.filter(
         (r) =>
           r.date >= bounds.from &&
           r.date <= bounds.to &&
           (filterProduct === "all" || r.productId === filterProduct)
       ),
-    [history, bounds, filterProduct]
+    [allSales, bounds, filterProduct]
   );
 
   const totalItems = rows.reduce((t, r) => t + r.quantity, 0);

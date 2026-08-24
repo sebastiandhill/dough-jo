@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useDough } from "@/lib/store";
@@ -46,6 +46,8 @@ export default function AdminPage() {
     toggleProductAvailability,
     updateProductCap,
     addProduct,
+    deleteProduct,
+    ensureRecurringOccurrences,
   } = useDough();
 
   const [tab, setTab] = useState<Tab>("baking");
@@ -53,7 +55,17 @@ export default function AdminPage() {
   const [adding, setAdding] = useState(false);
 
   const orders = getAdminOrders();
-  const dates = bakeDatesForWeek(week);
+  const dates = useMemo(() => bakeDatesForWeek(week), [week]);
+  const dateIds = useMemo(() => dates.map((d) => toISODate(d)), [dates]);
+
+  // Every active recurring order gets a real, trackable order on each of its
+  // projected pickup dates — not just the one it was created for — so the
+  // baker always sees the full picture for whatever week they're viewing.
+  useEffect(() => {
+    ensureRecurringOccurrences(dateIds);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateIds.join(",")]);
+
   const weekOrders = orders.filter((o) =>
     dates.some((d) => toISODate(d) === o.pickupDateId)
   );
@@ -246,6 +258,15 @@ export default function AdminPage() {
                   product={p}
                   onCapChange={(cap) => updateProductCap(p.id, cap)}
                   onToggle={() => toggleProductAvailability(p.id)}
+                  onDelete={() => {
+                    if (
+                      window.confirm(
+                        `Delete "${p.name}"? This can't be undone, and it will disappear from the website immediately.`
+                      )
+                    ) {
+                      deleteProduct(p.id);
+                    }
+                  }}
                 />
               ))}
             </div>
@@ -309,7 +330,7 @@ export default function AdminPage() {
           </div>
         )}
 
-        {tab === "totals" && <TotalsPanel products={products} />}
+        {tab === "totals" && <TotalsPanel products={products} orders={orders} />}
       </main>
     </div>
   );

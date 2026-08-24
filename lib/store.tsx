@@ -18,13 +18,9 @@ import type {
   RecurringOrder,
 } from "@/lib/types";
 import { initialProducts } from "@/lib/mock-data/products";
-import {
-  seedAdminOrders,
-  seedMyOrder,
-} from "@/lib/mock-data/seed-orders";
-import { seedMyRecurringOrder } from "@/lib/mock-data/seed-recurring";
 import { mockCustomer } from "@/lib/mock-data/seed-customer";
-import { getAvailablePickupDates as computeBaseDates } from "@/lib/dates";
+import { getAvailablePickupDates as computeAvailableDates } from "@/lib/dates";
+import { recurringOccursOn } from "@/lib/recurring";
 
 interface DoughState {
   products: Product[];
@@ -34,11 +30,13 @@ interface DoughState {
 
 const initialState: DoughState = {
   products: initialProducts,
-  orders: [...seedAdminOrders, seedMyOrder],
-  recurringOrders: [seedMyRecurringOrder],
+  orders: [],
+  recurringOrders: [],
 };
 
-const STORAGE_KEY = "dough-jo-mock-store-v1";
+// Bumped from v1 -> v2 to drop demo/seed orders that were cached in
+// visitors' browsers before the site went live with real data only.
+const STORAGE_KEY = "dough-jo-mock-store-v2";
 
 interface NewOrderInput {
   customerName: string;
@@ -72,6 +70,7 @@ interface DoughApi {
   // ---- read ----
   products: Product[];
   orders: Order[];
+  recurringOrders: RecurringOrder[];
   getProducts: () => Product[];
   getAvailablePickupDates: (count?: number) => PickupDate[];
   getCustomerOrders: () => { orders: Order[]; recurringOrders: RecurringOrder[] };
@@ -85,7 +84,12 @@ interface DoughApi {
     patch: Partial<
       Pick<
         RecurringOrder,
-        "status" | "items" | "weekday" | "frequency" | "nextPickupDateId"
+        | "status"
+        | "items"
+        | "weekday"
+        | "frequency"
+        | "nextPickupDateId"
+        | "anchorDateId"
       >
     > & { skipDateId?: string }
   ) => void;
@@ -95,6 +99,12 @@ interface DoughApi {
   toggleProductAvailability: (productId: string) => void;
   updateProductCap: (productId: string, cap: number) => void;
   addProduct: (input: NewProductInput) => Product;
+  deleteProduct: (productId: string) => void;
+  /** Materializes real, trackable Order rows for any active recurring order
+   * that has a projected occurrence on one of these dates and doesn't
+   * already have one — called whenever admin views a date range, so every
+   * future occurrence (not just the first) shows up with its own status. */
+  ensureRecurringOccurrences: (dateIds: string[]) => void;
 }
 
 const DoughContext = createContext<DoughApi | null>(null);
@@ -142,19 +152,14 @@ export function DoughStoreProvider({ children }: { children: React.ReactNode }) 
   const getProducts = useCallback(() => state.products, [state.products]);
 
   const getAvailablePickupDates = useCallback(
-    (count = 4) => {
-      const candidates = computeBaseDates(20);
-      const withLiveCapacity = candidates.map((d) => {
-        const consumed = state.orders
-          .filter((o) => o.pickupDateId === d.id)
-          .flatMap((o) => o.items)
-          .reduce((sum, item) => sum + item.quantity, 0);
-        const remainingCapacity = Math.max(0, d.remainingCapacity - consumed);
-        return { ...d, remainingCapacity, available: remainingCapacity > 0 };
-      });
-      return withLiveCapacity.filter((d) => d.available).slice(0, count);
-    },
-    [state.orders]
+    (count = 4) =>
+      computeAvailableDates(
+        state.products,
+        state.orders,
+        state.recurringOrders,
+        count
+      ),
+    [state.products, state.orders, state.recurringOrders]
   );
 
   const getCustomerOrders = useCallback(
@@ -197,6 +202,7 @@ export function DoughStoreProvider({ children }: { children: React.ReactNode }) 
         weekday: input.weekday,
         weekOfMonth: input.weekOfMonth,
         status: "active",
+        anchorDateId: input.nextPickupDateId,
         nextPickupDateId: input.nextPickupDateId,
         skippedDateIds: [],
         createdAt: new Date().toISOString(),
@@ -236,6 +242,14 @@ export function DoughStoreProvider({ children }: { children: React.ReactNode }) 
           }
           return next;
         }),
+        // A skipped pickup shouldn't linger as a real order on the baker's
+        // board for that date.
+        orders: patch.skipDateId
+          ? s.orders.filter(
+              (o) =>
+                !(o.recurringOrderId === id && o.pickupDateId === patch.skipDateId)
+            )
+          : s.orders,
       }));
     },
     []
@@ -283,10 +297,47 @@ export function DoughStoreProvider({ children }: { children: React.ReactNode }) 
     return product;
   }, []);
 
+  const deleteProduct = useCallback((productId: string) => {
+    setState((s) => ({
+      ...s,
+      products: s.products.filter((p) => p.id !== productId),
+    }));
+  }, []);
+
+  const ensureRecurringOccurrences = useCallback((dateIds: string[]) => {
+    setState((s) => {
+      const additions: Order[] = [];
+      dateIds.forEach((dateId) => {
+        s.recurringOrders.forEach((r) => {
+          if (!recurringOccursOn(r, dateId)) return;
+          const materialized =
+            s.orders.some(
+              (o) => o.recurringOrderId === r.id && o.pickupDateId === dateId
+            ) || additions.some((o) => o.recurringOrderId === r.id && o.pickupDateId === dateId);
+          if (materialized) return;
+          additions.push({
+            id: `ord-${r.id}-${dateId}`,
+            customerName: r.customerName,
+            phone: r.phone,
+            items: r.items,
+            pickupDateId: dateId,
+            status: "received",
+            recurring: true,
+            recurringOrderId: r.id,
+            createdAt: new Date().toISOString(),
+          });
+        });
+      });
+      if (additions.length === 0) return s;
+      return { ...s, orders: [...s.orders, ...additions] };
+    });
+  }, []);
+
   const value = useMemo<DoughApi>(
     () => ({
       products: state.products,
       orders: state.orders,
+      recurringOrders: state.recurringOrders,
       getProducts,
       getAvailablePickupDates,
       getCustomerOrders,
@@ -298,10 +349,13 @@ export function DoughStoreProvider({ children }: { children: React.ReactNode }) 
       toggleProductAvailability,
       updateProductCap,
       addProduct,
+      deleteProduct,
+      ensureRecurringOccurrences,
     }),
     [
       state.products,
       state.orders,
+      state.recurringOrders,
       getProducts,
       getAvailablePickupDates,
       getCustomerOrders,
@@ -313,6 +367,8 @@ export function DoughStoreProvider({ children }: { children: React.ReactNode }) 
       toggleProductAvailability,
       updateProductCap,
       addProduct,
+      deleteProduct,
+      ensureRecurringOccurrences,
     ]
   );
 

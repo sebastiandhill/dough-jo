@@ -6,13 +6,15 @@ export function ProductRow({
   product,
   onCapChange,
   onToggle,
+  onDelete,
 }: {
   product: Product;
   onCapChange: (cap: number) => void;
   onToggle: () => void;
+  onDelete: () => void;
 }) {
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-[88px_minmax(0,1fr)_150px_170px_150px] gap-5 items-center p-6 border border-divider rounded-md bg-neutral-100">
+    <div className="grid grid-cols-1 sm:grid-cols-[88px_minmax(0,1fr)_150px_170px_150px_auto] gap-5 items-center p-6 border border-divider rounded-md bg-neutral-100">
       <div className="plate relative w-22 h-22 sm:w-[88px] sm:h-[88px]">
         {product.image ? (
           <Image src={product.image} alt="" fill className="object-cover" />
@@ -60,14 +62,24 @@ export function ProductRow({
           </button>
         </div>
       </div>
-      <Button
-        size="sm"
-        variant={product.available ? "primary" : "secondary"}
-        onClick={onToggle}
-        className="whitespace-nowrap"
-      >
-        {product.available ? "On the website" : "Hidden"}
-      </Button>
+      <div className="flex flex-col gap-2.5 items-start sm:items-stretch">
+        <Button
+          size="sm"
+          variant={product.available ? "primary" : "secondary"}
+          onClick={onToggle}
+          className="whitespace-nowrap"
+        >
+          {product.available ? "On the website" : "Hidden"}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={onDelete}
+          className="whitespace-nowrap !text-neutral-700"
+        >
+          Delete
+        </Button>
+      </div>
     </div>
   );
 }

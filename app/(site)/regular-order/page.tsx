@@ -9,6 +9,7 @@ import {
   nextMonthlyDate,
   toISODate,
   formatLongDate,
+  canFulfillOnDate,
 } from "@/lib/dates";
 import { itemsTotal, cx } from "@/lib/utils";
 import type { OrderItem, RecurringFrequency } from "@/lib/types";
@@ -41,7 +42,7 @@ function chipClass(active: boolean) {
 }
 
 export default function RegularOrderPage() {
-  const { products, createRecurringOrder } = useDough();
+  const { products, orders, recurringOrders, createRecurringOrder } = useDough();
   const availableProducts = products.filter((p) => p.available);
 
   const [freq, setFreq] = useState<RecurringFrequency>("every-other");
@@ -81,7 +82,10 @@ export default function RegularOrderPage() {
       : `${freqInfo.cadence}${dayName}`;
 
   const total = itemsTotal(items, products);
-  const canSave = items.length > 0;
+  const firstPickupFits =
+    items.length > 0 &&
+    canFulfillOnDate(items, toISODate(nextDate), products, orders, recurringOrders);
+  const canSave = items.length > 0 && firstPickupFits;
 
   function handleSave() {
     if (!canSave) return;
@@ -219,6 +223,12 @@ export default function RegularOrderPage() {
           <div className="text-xl mt-1.5">
             ${total} {freqInfo.per}, paid in cash at each pickup.
           </div>
+          {items.length > 0 && !firstPickupFits && (
+            <div className="text-xl mt-3 font-semibold text-accent-800">
+              That&apos;s more than what&apos;s left for {formatLongDate(nextDate)}.
+              Try a smaller quantity or a different day.
+            </div>
+          )}
         </div>
 
         <div className="flex flex-wrap gap-4 mt-9">
